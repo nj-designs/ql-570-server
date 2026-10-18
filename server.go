@@ -12,11 +12,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/nj-designs/ql-570-server/internal/imaging"
 	"github.com/nj-designs/ql-570-server/internal/ql570"
+	"github.com/nj-designs/ql-570-server/internal/textlabel"
 )
 
 //go:embed web/index.html
@@ -26,15 +28,17 @@ const maxCopies = 100
 
 type server struct {
 	printer   *ql570.Printer
+	fonts     *textlabel.Fonts
 	maxUpload int64
 }
 
-func newServer(p *ql570.Printer, maxUpload int64) http.Handler {
-	s := &server{printer: p, maxUpload: maxUpload}
+func newServer(p *ql570.Printer, fonts *textlabel.Fonts, maxUpload int64) http.Handler {
+	s := &server{printer: p, fonts: fonts, maxUpload: maxUpload}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /api/media", s.handleMedia)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/fonts", s.handleFonts)
 	mux.HandleFunc("POST /api/preview", s.handlePreview)
 	mux.HandleFunc("POST /api/print", s.handlePrint)
 	return mux
@@ -47,6 +51,10 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ql570.AllMedia())
+}
+
+func (s *server) handleFonts(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"default": s.fonts.Default(), "families": s.fonts.Families()})
 }
 
 type statusResponse struct {
@@ -89,6 +97,9 @@ func (s *server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Print-Width", strconv.Itoa(bm.Width))
 	w.Header().Set("X-Print-Length", strconv.Itoa(bm.Height))
 	w.Header().Set("X-Rotation", strconv.Itoa(rot))
+	if req.clipped {
+		w.Header().Set("X-Text-Clipped", "1")
+	}
 	png.Encode(w, imaging.Preview(bm, rot))
 }
 
@@ -147,18 +158,26 @@ type printRequest struct {
 	opts    imaging.Options
 	copies  int
 	autoCut bool
+	clipped bool // text does not fit at the requested size
 }
 
-// parseRequest reads the multipart form shared by preview and print.
+// parseRequest reads the form shared by preview and print. A request
+// carries either an uploaded image or a text field.
 func (s *server) parseRequest(w http.ResponseWriter, r *http.Request) (*printRequest, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxUpload)
-	if err := r.ParseMultipartForm(1 << 20); err != nil {
+	err := r.ParseMultipartForm(1 << 20)
+	if errors.Is(err, http.ErrNotMultipart) {
+		err = r.ParseForm() // text can be sent URL-encoded
+	}
+	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			return nil, httpError{http.StatusRequestEntityTooLarge, fmt.Sprintf("upload is larger than %d MB", s.maxUpload>>20)}
 		}
 		return nil, badRequest("invalid upload: %v", err)
 	}
-	defer r.MultipartForm.RemoveAll()
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 
 	req := &printRequest{
 		opts:    imaging.Options{Rotate: imaging.Auto, Threshold: 128},
@@ -197,9 +216,16 @@ func (s *server) parseRequest(w http.ResponseWriter, r *http.Request) (*printReq
 		req.copies = n
 	}
 
+	if _, ok := r.Form["text"]; ok {
+		if err := s.parseText(r, req); err != nil {
+			return nil, err
+		}
+		return req, nil
+	}
+
 	f, _, err := r.FormFile("image")
 	if err != nil {
-		return nil, badRequest("no image uploaded")
+		return nil, badRequest("no image or text supplied")
 	}
 	defer f.Close()
 	data, err := io.ReadAll(f)
@@ -210,6 +236,45 @@ func (s *server) parseRequest(w http.ResponseWriter, r *http.Request) (*printReq
 		return nil, badRequest("%v", err)
 	}
 	return req, nil
+}
+
+// parseText renders the text fields into req.img.
+func (s *server) parseText(r *http.Request, req *printRequest) error {
+	o := textlabel.Options{
+		Font:   r.FormValue("font"),
+		Bold:   r.FormValue("bold") == "true",
+		Italic: r.FormValue("italic") == "true",
+		Invert: r.FormValue("invert") == "true",
+		Border: r.FormValue("border") == "true",
+	}
+	if o.Font != "" && !slices.Contains(s.fonts.Families(), o.Font) {
+		return badRequest("unknown font %q", o.Font)
+	}
+	switch r.FormValue("align") {
+	case "", "center":
+		o.Align = textlabel.Center
+	case "left":
+		o.Align = textlabel.Left
+	case "right":
+		o.Align = textlabel.Right
+	default:
+		return badRequest("align must be left, center or right")
+	}
+	if v := r.FormValue("size"); v != "" && v != "auto" {
+		pt, err := strconv.ParseFloat(v, 64)
+		if err != nil || pt < 2 || pt > 500 {
+			return badRequest("size must be auto or 2–500 points")
+		}
+		o.Size = pt
+	}
+	res, err := s.fonts.Render(r.FormValue("text"), req.media, o)
+	if err != nil {
+		return badRequest("%v", err)
+	}
+	req.img = imaging.FromImage(res.Image)
+	req.opts.Rotate = res.Rotate
+	req.clipped = res.Clipped
+	return nil
 }
 
 type httpError struct {

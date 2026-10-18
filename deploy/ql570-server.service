@@ -11,6 +11,8 @@ ExecStart=/usr/local/bin/ql570-server -addr :8080 -device /dev/usb/lp0
 DynamicUser=yes
 # usblp device nodes are owned by group lp.
 SupplementaryGroups=lp
+# Holds the system font index (passed to the server as $CACHE_DIRECTORY).
+CacheDirectory=ql570-server
 Restart=on-failure
 
 [Install]

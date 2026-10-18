@@ -5,16 +5,19 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nj-designs/ql-570-server/internal/ql570"
+	"github.com/nj-designs/ql-570-server/internal/textlabel"
 )
 
 func upload(t *testing.T, url string, fields map[string]string) *http.Response {
@@ -35,10 +38,84 @@ func upload(t *testing.T, url string, fields map[string]string) *http.Response {
 	return res
 }
 
+func testFonts(t *testing.T) *textlabel.Fonts {
+	t.Helper()
+	f, err := textlabel.LoadFonts(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestServerText(t *testing.T) {
+	dev := filepath.Join(t.TempDir(), "lp0")
+	os.WriteFile(dev, nil, 0o600)
+	ts := httptest.NewServer(newServer(ql570.NewPrinter(dev), testFonts(t), 1<<20))
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/api/fonts")
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("fonts: %v %v", err, res.Status)
+	}
+	var fonts struct {
+		Default  string
+		Families []string
+	}
+	json.NewDecoder(res.Body).Decode(&fonts)
+	res.Body.Close()
+	if fonts.Default == "" || len(fonts.Families) == 0 {
+		t.Fatalf("fonts = %+v", fonts)
+	}
+
+	// Text works URL-encoded as well as multipart.
+	res, err = http.PostForm(ts.URL+"/api/preview", url.Values{"media": {"29x90"}, "text": {"Hello"}, "font": {"Go"}})
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("preview: %v %v", err, res.Status)
+	}
+	img, err := png.Decode(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Shown with the label's long side horizontal.
+	if b := img.Bounds(); b.Dx() != 991 || b.Dy() != 306 {
+		t.Errorf("text preview is %v", b)
+	}
+
+	res, _ = http.PostForm(ts.URL+"/api/preview", url.Values{"media": {"62x29"}, "text": {"Hi"}, "font": {"Go"}, "size": {"200"}})
+	if res.Header.Get("X-Text-Clipped") != "1" {
+		t.Error("oversized text not flagged as clipped")
+	}
+	res.Body.Close()
+
+	for name, form := range map[string]url.Values{
+		"blank":    {"media": {"62"}, "text": {"  "}},
+		"font":     {"media": {"62"}, "text": {"x"}, "font": {"No Such Font"}},
+		"size":     {"media": {"62"}, "text": {"x"}, "size": {"1"}},
+		"align":    {"media": {"62"}, "text": {"x"}, "align": {"justify"}},
+		"no input": {"media": {"62"}},
+	} {
+		res, _ := http.PostForm(ts.URL+"/api/preview", form)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %s", name, res.Status)
+		}
+		res.Body.Close()
+	}
+
+	res, _ = http.PostForm(ts.URL+"/api/print", url.Values{"media": {"62"}, "text": {"Hello\nworld"}, "copies": {"2"}})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("print: %s", res.Status)
+	}
+	res.Body.Close()
+	if job, _ := os.ReadFile(dev); job[len(job)-1] != 0x1a {
+		t.Error("device received a malformed job")
+	}
+}
+
 func TestServer(t *testing.T) {
 	dev := filepath.Join(t.TempDir(), "lp0")
 	os.WriteFile(dev, nil, 0o600)
-	ts := httptest.NewServer(newServer(ql570.NewPrinter(dev), 1<<20))
+	ts := httptest.NewServer(newServer(ql570.NewPrinter(dev), testFonts(t), 1<<20))
 	defer ts.Close()
 
 	res := upload(t, ts.URL+"/api/preview", map[string]string{"media": "29x90", "mode": "dither"})

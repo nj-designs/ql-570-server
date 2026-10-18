@@ -50,9 +50,21 @@ func Load(data []byte) (*Gray, error) {
 	return g, nil
 }
 
+// FromImage converts an already decoded image, such as rendered text.
+func FromImage(img image.Image) *Gray { return toGray(img) }
+
 func toGray(img image.Image) *Gray {
 	b := img.Bounds()
 	g := newGray(b.Dx(), b.Dy())
+	if gr, ok := img.(*image.Gray); ok {
+		for y := range g.h {
+			row := gr.Pix[gr.PixOffset(b.Min.X, b.Min.Y+y):]
+			for x := range g.w {
+				g.pix[y*g.w+x] = float32(row[x])
+			}
+		}
+		return g
+	}
 	if yc, ok := img.(*image.YCbCr); ok {
 		for y := range g.h {
 			row := yc.Y[yc.YOffset(b.Min.X, b.Min.Y+y):]
