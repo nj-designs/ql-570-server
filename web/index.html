@@ -1,0 +1,351 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Neil Johnson -->
+<!-- SPDX-License-Identifier: MIT -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label Printer</title>
+<style>
+  :root {
+    --bg: #f4f4f2;
+    --panel: #ffffff;
+    --text: #1d1d1b;
+    --muted: #6b6b66;
+    --border: #dcdcd6;
+    --accent: #2f5fd0;
+    --accent-text: #ffffff;
+    --ok: #2e8540;
+    --warn: #b7791f;
+    --bad: #c53030;
+    --stage: #e6e6e1;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615;
+      --panel: #212120;
+      --text: #ecece8;
+      --muted: #9a9a93;
+      --border: #3a3a37;
+      --accent: #6b93f0;
+      --accent-text: #0e0e0d;
+      --ok: #5cb870;
+      --warn: #e0a84a;
+      --bad: #ef6b6b;
+      --stage: #2b2b29;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  main {
+    display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 20px;
+    padding: 20px; max-width: 1200px; margin: 0 auto;
+  }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .controls { display: flex; flex-direction: column; gap: 16px; align-self: start; }
+  label.field, .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+  .hint { font-size: 12px; font-weight: 400; color: var(--muted); margin: 0; }
+  select, input[type=number] {
+    font: inherit; font-weight: 400; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; width: 100%;
+  }
+  .drop {
+    border: 1.5px dashed var(--border); border-radius: 8px; padding: 20px 14px;
+    text-align: center; cursor: pointer; color: var(--muted); font-size: 14px;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop strong { color: var(--text); word-break: break-all; }
+  .drop input { display: none; }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg label { flex: 1; text-align: center; padding: 7px 4px; font-weight: 400; cursor: pointer; font-size: 14px; }
+  .seg label + label { border-left: 1px solid var(--border); }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--accent-text); }
+  .slider { display: flex; align-items: center; gap: 10px; font-weight: 400; }
+  .slider input { flex: 1; accent-color: var(--accent); }
+  .slider output { width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 14px; align-items: end; }
+  .row > * { flex: 1; }
+  label.field.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; padding-bottom: 8px; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 7px; padding: 11px;
+    background: var(--accent); color: var(--accent-text); cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.link { background: none; color: var(--accent); padding: 2px 4px; font-weight: 500; font-size: 13px; }
+  .msg { font-size: 14px; margin: 0; min-height: 1.4em; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .preview { display: flex; flex-direction: column; gap: 12px; min-height: 360px; }
+  .stage {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    background: var(--stage); border-radius: 8px; padding: 24px; min-height: 300px;
+  }
+  .stage img {
+    max-width: 100%; max-height: 65vh; background: #fff; display: block;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.08);
+  }
+  .stage img.round { border-radius: 50%; }
+  .stage img.diecut { border-radius: 6px; }
+  .stage img.busy { opacity: .5; }
+  .empty { color: var(--muted); text-align: center; }
+  .meta { font-size: 13px; color: var(--muted); margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>QL-570 Label Printer</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">Checking printer…</span>
+    <button class="link" id="refresh" type="button">Refresh</button></div>
+</header>
+<main>
+  <section class="panel controls">
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="image/png,image/jpeg,image/gif">
+      <span id="dropText">Drop an image here, paste one, or <u>choose a file</u><br><small>PNG, JPEG or GIF</small></span>
+    </label>
+
+    <label class="field">Media
+      <select id="media"></select>
+      <p class="hint" id="mediaHint"></p>
+    </label>
+
+    <label class="field">Rotation
+      <select id="rotate">
+        <option value="auto">Automatic</option>
+        <option value="0">None</option>
+        <option value="90">90° clockwise</option>
+        <option value="180">180°</option>
+        <option value="270">90° anticlockwise</option>
+      </select>
+    </label>
+
+    <div class="field">Black &amp; white conversion
+      <div class="seg">
+        <label><input type="radio" name="mode" value="threshold" checked>Threshold</label>
+        <label><input type="radio" name="mode" value="dither">Dither</label>
+      </div>
+      <p class="hint" id="modeHint">Sharp edges: best for text, logos and barcodes.</p>
+    </div>
+
+    <label class="field"><span id="thresholdLabel">Cutoff</span>
+      <span class="slider"><input type="range" id="threshold" min="1" max="254" value="128"><output id="thresholdOut">128</output></span>
+    </label>
+
+    <div class="row">
+      <label class="field">Copies <input type="number" id="copies" min="1" max="100" value="1"></label>
+      <label class="field check"><input type="checkbox" id="autocut" checked>Cut each label</label>
+    </div>
+
+    <button id="print" type="button" disabled>Print</button>
+    <p class="msg" id="msg" role="status"></p>
+  </section>
+
+  <section class="panel preview">
+    <div class="stage" id="stage"><p class="empty">Choose an image to see a preview of the printed label.</p></div>
+    <p class="meta" id="meta"></p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const DPI = 300, MM = 25.4;
+let media = [], file = null, detected = null, timer = null, ctl = null, previewURL = null;
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+function current() { return media.find(m => m.id === $('media').value); }
+function mode() { return document.querySelector('input[name=mode]:checked').value; }
+
+async function loadMedia() {
+  media = await (await fetch('api/media')).json();
+  const groups = { continuous: 'Continuous rolls', 'die-cut': 'Die-cut labels', round: 'Round labels' };
+  for (const [kind, title] of Object.entries(groups)) {
+    const g = document.createElement('optgroup');
+    g.label = title;
+    for (const m of media.filter(m => m.kind === kind)) g.append(new Option(m.name, m.id));
+    $('media').append(g);
+  }
+  const saved = store.get('media');
+  if (saved && media.some(m => m.id === saved)) $('media').value = saved;
+  mediaChanged();
+}
+
+function mediaChanged() {
+  const m = current();
+  if (!m) return;
+  store.set('media', m.id);
+  const size = m.lengthDots
+    ? `${m.widthDots} × ${m.lengthDots} dots`
+    : `${m.widthDots} dots wide, length follows the image`;
+  const products = m.products && m.products.length ? ' · ' + m.products.join(', ') : '';
+  let hint = `Printable ${size}${products}`;
+  if (detected && detected !== m.id) hint = `⚠ Doesn't match the loaded media. ` + hint;
+  $('mediaHint').textContent = hint;
+  schedulePreview();
+}
+
+async function refreshStatus() {
+  let s;
+  try { s = await (await fetch('api/status')).json(); }
+  catch { s = { error: 'server unreachable' }; }
+  const dot = $('dot');
+  dot.className = 'dot';
+  if (!s.connected) {
+    dot.classList.add('bad');
+    $('statusText').textContent = 'Printer offline: ' + s.error;
+  } else if (s.error) {
+    dot.classList.add('warn');
+    $('statusText').textContent = 'Printer connected; ' + s.error;
+  } else if (s.problems && s.problems.length) {
+    dot.classList.add('bad');
+    $('statusText').textContent = 'Printer: ' + s.problems.join(', ');
+  } else {
+    dot.classList.add(s.media ? 'ok' : 'warn');
+    $('statusText').textContent = 'Ready · ' + s.mediaName + ' loaded';
+  }
+  const prev = detected;
+  detected = s.media || null;
+  if (detected && detected !== prev) $('media').value = detected;
+  mediaChanged();
+}
+
+function form() {
+  const fd = new FormData();
+  fd.append('image', file);
+  fd.append('media', $('media').value);
+  fd.append('rotate', $('rotate').value);
+  fd.append('mode', mode());
+  fd.append('threshold', $('threshold').value);
+  fd.append('copies', $('copies').value);
+  fd.append('autocut', $('autocut').checked);
+  return fd;
+}
+
+function schedulePreview() {
+  clearTimeout(timer);
+  timer = setTimeout(updatePreview, 150);
+}
+
+async function updatePreview() {
+  if (!file || !current()) return;
+  ctl?.abort();
+  ctl = new AbortController();
+  const img = $('stage').querySelector('img');
+  img?.classList.add('busy');
+  let res;
+  try {
+    res = await fetch('api/preview', { method: 'POST', body: form(), signal: ctl.signal });
+  } catch (e) {
+    if (e.name !== 'AbortError') showMsg('Preview failed: ' + e.message, true);
+    return;
+  }
+  if (!res.ok) {
+    img?.classList.remove('busy');
+    showMsg((await res.json()).error, true);
+    return;
+  }
+  const blob = await res.blob();
+  if (previewURL) URL.revokeObjectURL(previewURL);
+  previewURL = URL.createObjectURL(blob);
+  const m = current();
+  const el = document.createElement('img');
+  el.src = previewURL;
+  el.alt = 'Label preview';
+  el.className = m.kind === 'round' ? 'round' : m.kind === 'die-cut' ? 'diecut' : '';
+  $('stage').replaceChildren(el);
+
+  const across = +res.headers.get('X-Print-Width'), along = +res.headers.get('X-Print-Length');
+  const rot = res.headers.get('X-Rotation');
+  const mm = d => (d / DPI * MM).toFixed(1);
+  let meta = m.kind === 'continuous'
+    ? `${m.widthMm} mm tape, ≈ ${mm(along)} mm long (plus feed margins)`
+    : `${m.name} label`;
+  meta += ` · ${across} × ${along} dots`;
+  if (rot !== '0') meta += ` · rotated ${rot}° to fit`;
+  $('meta').textContent = meta;
+  $('print').disabled = false;
+  if ($('msg').classList.contains('bad')) showMsg('');
+}
+
+function showMsg(text, bad = false) {
+  $('msg').textContent = text;
+  $('msg').className = 'msg ' + (text ? (bad ? 'bad' : 'ok') : '');
+}
+
+function setFile(f) {
+  if (!f || !f.type.startsWith('image/')) return;
+  file = f;
+  const name = document.createElement('strong');
+  name.textContent = f.name || 'Pasted image';
+  $('dropText').replaceChildren(name, document.createElement('br'), Object.assign(document.createElement('small'), { textContent: 'Click or drop to replace' }));
+  showMsg('');
+  schedulePreview();
+}
+
+async function print() {
+  $('print').disabled = true;
+  showMsg('Printing…');
+  try {
+    const res = await fetch('api/print', { method: 'POST', body: form() });
+    const body = await res.json();
+    showMsg(res.ok ? body.message : body.error, !res.ok);
+  } catch (e) {
+    showMsg('Print failed: ' + e.message, true);
+  } finally {
+    $('print').disabled = false;
+    refreshStatus();
+  }
+}
+
+function modeChanged() {
+  const dither = mode() === 'dither';
+  $('thresholdLabel').textContent = dither ? 'Brightness' : 'Cutoff';
+  $('modeHint').textContent = dither
+    ? 'Simulates grey with dot patterns: best for photos.'
+    : 'Sharp edges: best for text, logos and barcodes.';
+  store.set('mode', mode());
+  schedulePreview();
+}
+
+$('file').addEventListener('change', e => setFile(e.target.files[0]));
+const drop = $('drop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); setFile(e.dataTransfer.files[0]); });
+document.addEventListener('paste', e => {
+  const item = [...e.clipboardData.items].find(i => i.type.startsWith('image/'));
+  if (item) setFile(item.getAsFile());
+});
+$('media').addEventListener('change', mediaChanged);
+$('rotate').addEventListener('change', schedulePreview);
+document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', modeChanged));
+$('threshold').addEventListener('input', () => { $('thresholdOut').value = $('threshold').value; schedulePreview(); });
+$('print').addEventListener('click', print);
+$('refresh').addEventListener('click', refreshStatus);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
+
+const savedMode = store.get('mode');
+if (savedMode) document.querySelector(`input[name=mode][value=${savedMode === 'dither' ? 'dither' : 'threshold'}]`).checked = true;
+modeChanged();
+loadMedia().then(refreshStatus);
+setInterval(() => { if (!document.hidden) refreshStatus(); }, 15000);
+</script>
+</body>
+</html>

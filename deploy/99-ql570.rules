@@ -1,0 +1,6 @@
+# Copyright (c) 2026 Neil Johnson
+# SPDX-License-Identifier: MIT
+
+# Optional: give the QL-570 a stable name (/dev/usb/ql570) in case other USB
+# printers are attached. Pass -device /dev/usb/ql570 to the server.
+SUBSYSTEM=="usbmisc", KERNEL=="lp*", ATTRS{idVendor}=="04f9", ATTRS{idProduct}=="2028", SYMLINK+="usb/ql570", GROUP="lp", MODE="0660"

@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Neil Johnson
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Brother QL-570 label print server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ql570-server -addr :8080 -device /dev/usb/lp0
+DynamicUser=yes
+# usblp device nodes are owned by group lp.
+SupplementaryGroups=lp
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
